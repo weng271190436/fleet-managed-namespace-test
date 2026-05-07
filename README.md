@@ -11,7 +11,8 @@ End-to-end test steps for Azure Fleet Manager Managed Namespaces using a preview
 
 ```bash
 az extension remove --name fleet 2>/dev/null
-az extension add --source "https://weiwengstorage.blob.core.windows.net/fleet-cli/fleet-2.1.0-py3-none-any.whl?se=2026-06-05T19%3A37Z&sp=r&sv=2026-02-06&sr=b&sig=GjcsH0ZPT75O%2Fb0TboiV0je3SQTMfSqDS3s02VX95Wc%3D" -y
+curl -L -o /tmp/fleet-2.1.0-py3-none-any.whl "https://weiwengstorage.blob.core.windows.net/fleet-cli/fleet-2.1.0-py3-none-any.whl?se=2026-06-06T17%3A06Z&sp=r&sv=2026-02-06&sr=b&sig=9L3yHg%2B3cJgMEFCcVdJTQrH54xbz5xJoLRspksIYmuc%3D"
+az extension add --source /tmp/fleet-2.1.0-py3-none-any.whl -y
 ```
 
 ## Set up environment
