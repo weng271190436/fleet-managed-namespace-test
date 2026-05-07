@@ -53,6 +53,11 @@ az fleet get-credentials -g $GROUP -n $FLEET --overwrite-existing
 az fleet namespace delete -g $GROUP -f $FLEET -n $MANAGED_NAMESPACE --yes
 ```
 
+**Result: PASS** (tested 2026-05-07)
+- ARM resource created with `PickFixed`, both clusters listed
+- Namespace `test-ns` Active on hub (29s), member-01 (33s), member-02 (38s)
+- Delete succeeded
+
 ---
 
 ## Scenario 2: Create with all optional properties
