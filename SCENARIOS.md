@@ -570,3 +570,173 @@ az fleet namespace delete -g $GROUP -f $FLEET -n $MANAGED_NAMESPACE --yes
 - Re-created with `--adoption-policy Always` — succeeded, ARM resource recreated
 - Namespace remained Active on member throughout (age 71s at verification)
 - Confirms the workaround for the Keep-delete + re-create flow
+
+---
+
+## Scenario 13: Create with External rollout strategy directly
+
+**Goal:** Verify creating a namespace with External rollout strategy at creation time (not via update).
+
+```bash
+kubectl apply -f - <<EOF
+apiVersion: placement.kubernetes-fleet.io/v1
+kind: ClusterStagedUpdateStrategy
+metadata:
+  name: s13-strategy
+spec:
+  stages:
+    - name: dev
+      labelSelector:
+        matchLabels:
+          environment: team-alpha-development
+      afterStageTasks:
+        - type: TimedWait
+          waitTime: 30s
+    - name: prod
+      labelSelector:
+        matchLabels:
+          environment: team-alpha-production
+EOF
+
+az fleet namespace create \
+  -g $GROUP -f $FLEET -n test-s13 \
+  --member-cluster-names contoso-prd-01-fm contoso-prd-02-fm \
+  --rollout-strategy External \
+  --cluster-update-strategy s13-strategy \
+  --delete-policy Delete --adoption-policy Never
+```
+
+**Cleanup:**
+
+```bash
+az fleet namespace delete -g $GROUP -f $FLEET -n test-s13 --yes
+kubectl delete clusterstagedupdatestrategy s13-strategy
+```
+
+**Result: PASS** (tested 2026-05-07)
+- Created with PickFixed + External rollout + strategy reference in a single create command
+- Verified: `placementType=PickFixed`, `rolloutStrategy.type=External`, `clusterUpdateStrategy.name=s13-strategy`
+
+---
+
+## Scenario 14: Update strategy name on existing External namespace
+
+**Goal:** Verify updating only the `--cluster-update-strategy` name without re-specifying `--rollout-strategy`.
+
+```bash
+# After S13, with namespace already on External:
+az fleet namespace update \
+  -g $GROUP -f $FLEET -n test-s13 \
+  --cluster-update-strategy s14-new-strategy
+```
+
+**Result: FAIL / BUG** (tested 2026-05-07)
+- Updating `--cluster-update-strategy` alone (without `--rollout-strategy External`) is **silently ignored** — the old strategy name is retained
+- Adding `--rollout-strategy External` explicitly works: `az fleet namespace update --rollout-strategy External --cluster-update-strategy s14-new-strategy`
+- **Root cause:** The `validate_rollout_strategy` validator is not wired to the `fleet namespace update` command in `_params.py`, so the CLI doesn't reject or handle `--cluster-update-strategy` alone on update. The `_build_propagation_policy` function sees `rollout_strategy=None` and skips building the rollout strategy object.
+- **Workaround:** Always specify `--rollout-strategy External` when updating the strategy name.
+
+---
+
+## Scenario 15: adoption-policy IfIdentical
+
+**Goal:** Verify that `--adoption-policy IfIdentical` adopts a namespace only when labels/annotations match.
+
+```bash
+# Create with labels, delete with Keep, re-create with IfIdentical and same labels
+az fleet namespace create -g $GROUP -f $FLEET -n test-s15 \
+  --member-cluster-names contoso-prd-01-fm \
+  --labels "team=alpha" \
+  --delete-policy Keep --adoption-policy Never
+
+az fleet namespace delete -g $GROUP -f $FLEET -n test-s15 --yes
+
+az fleet namespace create -g $GROUP -f $FLEET -n test-s15 \
+  --member-cluster-names contoso-prd-01-fm \
+  --labels "team=alpha" \
+  --delete-policy Delete --adoption-policy IfIdentical
+```
+
+**Result: FAIL (possible bug or expected behavior)** (tested 2026-05-07)
+- `IfIdentical` rejected the adoption: `AdoptionNotPossible: resources are not identical`
+- Even though user-specified labels match (`team=alpha`), the existing K8s namespace has additional system labels (e.g., `fleet.azure.com/managed-by: arm`) from the previous managed state
+- The server considers the resources "not identical" due to these extra labels
+- **Question for PM:** Is this expected? Should `IfIdentical` only compare user-specified labels, or all labels including system-managed ones?
+
+---
+
+## Scenario 16: Invalid inputs
+
+**Goal:** Verify error handling for various invalid inputs.
+
+### Non-existent member cluster name
+
+```bash
+az fleet namespace create -g $GROUP -f $FLEET -n test-s16 \
+  --member-cluster-names fake-cluster-name \
+  --delete-policy Delete --adoption-policy Never
+```
+
+**Result: UNEXPECTED** — Server accepted `fake-cluster-name` without validation. The namespace was created with a PickFixed CRP referencing a non-existent cluster. This may be by design (eventual consistency) or a validation gap.
+
+### Non-existent strategy name
+
+```bash
+az fleet namespace create -g $GROUP -f $FLEET -n test-s16b \
+  --member-cluster-names contoso-prd-01-fm \
+  --rollout-strategy External \
+  --cluster-update-strategy nonexistent-strategy \
+  --delete-policy Delete --adoption-policy Never
+```
+
+**Result: PASS** — Server correctly rejected: `cluster staged update strategy does not exist on the hub cluster`
+
+### Invalid namespace name
+
+```bash
+az fleet namespace create -g $GROUP -f $FLEET -n "INVALID_NAME!" \
+  --member-cluster-names contoso-prd-01-fm \
+  --delete-policy Delete --adoption-policy Never
+```
+
+**Result: PASS** — Server correctly rejected: `namespace name must start/end with a lowercase letter or digit, and contain only lowercase letters, digits, or hyphens`
+
+---
+
+## Scenario 17: az fleet namespace wait
+
+**Goal:** Verify `az fleet namespace wait` works as a workaround for the LRO polling bug.
+
+```bash
+az fleet namespace create -g $GROUP -f $FLEET -n test-s17 \
+  --member-cluster-names contoso-prd-01-fm \
+  --delete-policy Delete --adoption-policy Never
+
+az fleet namespace wait -g $GROUP -f $FLEET -n test-s17 --created
+
+az fleet namespace show -g $GROUP -f $FLEET -n test-s17 --query "properties.provisioningState"
+```
+
+**Result: PASS** (tested 2026-05-07)
+- `create` returned in ~2s with `provisioningState: Creating` (LRO bug)
+- `wait --created` returned in <1s (provisioning completed fast)
+- `show` confirmed `provisioningState: Succeeded`
+- `wait` is a valid workaround for the LRO bug when scripts need to ensure completion
+
+---
+
+## Scenario 18: Remove all members via update
+
+**Goal:** Verify behavior when updating with empty `--member-cluster-names`.
+
+```bash
+az fleet namespace update \
+  -g $GROUP -f $FLEET -n test-s17 \
+  --member-cluster-names
+```
+
+**Result: NO-OP** (tested 2026-05-07)
+- `--member-cluster-names` with no values results in an empty list `[]`
+- `_build_propagation_policy` sees empty list as falsy, returns `None`
+- PATCH sends no propagation policy change — existing cluster list unchanged
+- **Note:** There is currently no way to remove all member clusters via the CLI update command. Users would need to delete and re-create the namespace.
