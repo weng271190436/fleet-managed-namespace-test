@@ -95,6 +95,12 @@ az fleet get-credentials -g $GROUP -n $FLEET --overwrite-existing
 az fleet namespace delete -g $GROUP -f $FLEET -n $MANAGED_NAMESPACE --yes
 ```
 
+**Result: PASS** (tested 2026-05-07)
+- All properties set correctly: labels (team=platform, env=staging), annotations (owner, contact), quota (500m/2000m CPU, 256Mi/1Gi memory), network policy (DenyAll ingress, AllowSameNamespace egress), adoptionPolicy=Always, deletePolicy=Keep
+- ResourceQuota created on member: `requests.cpu: 0/500m, requests.memory: 0/256Mi, limits.cpu: 0/2, limits.memory: 0/1Gi`
+- NetworkPolicy `default` created on member
+- Delete succeeded
+
 ---
 
 ## Scenario 3: Create without member clusters (should fail or create hub-only)
