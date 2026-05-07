@@ -496,3 +496,77 @@ az fleet namespace delete -g $GROUP -f $FLEET -n test-ns-2 --yes
 **Result: PASS** (tested 2026-05-07)
 - List returned all 3 namespaces (test-ns-10, test-ns-11a, test-ns-11b) in table format
 - Show returned correct details for each individual namespace
+
+---
+
+## Scenario 12: Re-create namespace after Keep-delete using adoption policy
+
+**Goal:** Verify that after deleting a namespace with Keep policy, you can re-create it with `--adoption-policy Always` to adopt the existing K8s namespace.
+
+```bash
+# Step 1: Create with Keep policy
+az fleet namespace create \
+  -g $GROUP -f $FLEET -n $MANAGED_NAMESPACE \
+  --member-cluster-names contoso-prd-01-fm \
+  --delete-policy Keep --adoption-policy Never
+
+# Wait for propagation
+sleep 30
+
+# Step 2: Delete (K8s namespace preserved)
+az fleet namespace delete -g $GROUP -f $FLEET -n $MANAGED_NAMESPACE --yes
+```
+
+**Verify namespace still exists on hub and member:**
+
+```bash
+# Hub
+az fleet get-credentials -g $GROUP -n $FLEET --overwrite-existing
+kubectl get ns $MANAGED_NAMESPACE
+
+# Member
+az aks get-credentials -g $GROUP -n contoso-prd-01-fm --overwrite-existing
+kubectl get ns $MANAGED_NAMESPACE
+```
+
+```bash
+# Step 3: Re-create with adoption-policy Always (should succeed)
+az fleet get-credentials -g $GROUP -n $FLEET --overwrite-existing
+az fleet namespace create \
+  -g $GROUP -f $FLEET -n $MANAGED_NAMESPACE \
+  --member-cluster-names contoso-prd-01-fm \
+  --delete-policy Delete --adoption-policy Always
+```
+
+**Verify:**
+
+```bash
+# ARM resource exists again
+az fleet namespace show -g $GROUP -f $FLEET -n $MANAGED_NAMESPACE -o table
+
+# Namespace still Active on member
+az aks get-credentials -g $GROUP -n contoso-prd-01-fm --overwrite-existing
+kubectl get ns $MANAGED_NAMESPACE
+```
+
+```bash
+# Step 4: Also verify that adoption-policy Never would fail
+# (Don't run this after step 3 — only for reference)
+# az fleet namespace create -g $GROUP -f $FLEET -n $MANAGED_NAMESPACE \
+#   --member-cluster-names contoso-prd-01-fm \
+#   --delete-policy Delete --adoption-policy Never
+# Expected error: AdoptionNotPossible
+```
+
+**Cleanup:**
+
+```bash
+az fleet get-credentials -g $GROUP -n $FLEET --overwrite-existing
+az fleet namespace delete -g $GROUP -f $FLEET -n $MANAGED_NAMESPACE --yes
+```
+
+**Result: PASS** (tested 2026-05-07)
+- Created with Keep policy, deleted — K8s namespace preserved on hub and member
+- Re-created with `--adoption-policy Always` — succeeded, ARM resource recreated
+- Namespace remained Active on member throughout (age 71s at verification)
+- Confirms the workaround for the Keep-delete + re-create flow
