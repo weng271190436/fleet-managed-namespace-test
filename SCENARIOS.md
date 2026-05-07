@@ -740,3 +740,105 @@ az fleet namespace update \
 - `_build_propagation_policy` sees empty list as falsy, returns `None`
 - PATCH sends no propagation policy change — existing cluster list unchanged
 - **Note:** There is currently no way to remove all member clusters via the CLI update command. Users would need to delete and re-create the namespace.
+
+---
+
+## Scenario 19: Create with reserved/system namespace name
+
+**Goal:** Verify server rejects reserved namespace names like `kube-system`, `default`.
+
+```bash
+az fleet namespace create -g $GROUP -f $FLEET -n kube-system \
+  --member-cluster-names contoso-prd-01-fm --delete-policy Delete --adoption-policy Never
+
+az fleet namespace create -g $GROUP -f $FLEET -n default \
+  --member-cluster-names contoso-prd-01-fm --delete-policy Delete --adoption-policy Never
+```
+
+**Result: PASS** (tested 2026-05-07)
+- Both rejected: `namespace name must not match a reserved pattern`
+- Reserved patterns: `default`, `kube-*`, `azure-arc*`, `fleet-*`, `*-system`, `cert-manager`
+
+---
+
+## Scenario 20: Update adoption and delete policy
+
+**Goal:** Verify adoption and delete policies can be changed after creation.
+
+```bash
+az fleet namespace create -g $GROUP -f $FLEET -n test-s20 \
+  --member-cluster-names contoso-prd-01-fm --delete-policy Keep --adoption-policy Never
+
+az fleet namespace update -g $GROUP -f $FLEET -n test-s20 \
+  --delete-policy Delete --adoption-policy Always
+
+az fleet namespace show -g $GROUP -f $FLEET -n test-s20 \
+  --query "{adoptionPolicy: properties.adoptionPolicy, deletePolicy: properties.deletePolicy}"
+```
+
+**Result: PASS** (tested 2026-05-07)
+- Changed from `Keep/Never` to `Delete/Always` successfully
+- Verified via show: `adoptionPolicy=Always`, `deletePolicy=Delete`
+
+---
+
+## Scenario 21: Create with annotations only, no labels
+
+**Goal:** Verify annotations propagate to member clusters independently of labels.
+
+```bash
+az fleet namespace create -g $GROUP -f $FLEET -n test-s21 \
+  --member-cluster-names contoso-prd-01-fm \
+  --annotations "owner=team-alpha contact=oncall" \
+  --delete-policy Delete --adoption-policy Never
+```
+
+**Verify:**
+
+```bash
+az aks get-credentials -g $GROUP -n contoso-prd-01-fm --overwrite-existing
+kubectl get ns test-s21 -o jsonpath='{.metadata.annotations}'
+```
+
+**Result: PASS** (tested 2026-05-07)
+- Annotations `owner=team-alpha` and `contact=oncall` propagated to member cluster namespace
+- Fleet system annotations also present (`kubernetes-fleet.io/spec-hash`, etc.)
+
+---
+
+## Scenario 22: get-credentials with invalid member name
+
+**Goal:** Verify clear error when using a non-existent member name with get-credentials.
+
+```bash
+az fleet namespace get-credentials \
+  -g $GROUP -f $FLEET -n test-s21 --member fake-member
+```
+
+**Result: PASS** (tested 2026-05-07)
+- Clear error: `Error getting credentials for fleet member 'fake-member': ResourceNotFound`
+
+---
+
+## Scenario 23: Two namespaces on same member cluster
+
+**Goal:** Verify multiple managed namespaces can coexist on the same member cluster.
+
+```bash
+az fleet namespace create -g $GROUP -f $FLEET -n test-s23a \
+  --member-cluster-names contoso-prd-01-fm --delete-policy Delete --adoption-policy Never
+
+az fleet namespace create -g $GROUP -f $FLEET -n test-s23b \
+  --member-cluster-names contoso-prd-01-fm --delete-policy Delete --adoption-policy Never
+```
+
+**Verify:**
+
+```bash
+az aks get-credentials -g $GROUP -n contoso-prd-01-fm --overwrite-existing
+kubectl get ns test-s23a test-s23b
+```
+
+**Result: PASS** (tested 2026-05-07)
+- Both namespaces Active on the same member cluster
+- `test-s23a` (19s) and `test-s23b` (18s) coexist without conflict
