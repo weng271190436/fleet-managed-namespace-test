@@ -138,6 +138,11 @@ az fleet namespace show -g $GROUP -f $FLEET -n $MANAGED_NAMESPACE \
 az fleet namespace delete -g $GROUP -f $FLEET -n $MANAGED_NAMESPACE --yes
 ```
 
+**Result: PASS** (tested 2026-05-07)
+- Create without `--member-cluster-names` correctly blocked with: `--member-cluster-names is required for creating a managed namespace.`
+- No ARM resource, namespace, or CRP was created
+- Note: This validation is in the preview wheel (v2.1.0). The behavior may change based on PM decision (see README for options).
+
 ---
 
 ## Scenario 4: Update member cluster list
