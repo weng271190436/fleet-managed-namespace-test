@@ -347,6 +347,11 @@ az fleet namespace show -g $GROUP -f $FLEET -n $MANAGED_NAMESPACE \
 az fleet namespace delete -g $GROUP -f $FLEET -n $MANAGED_NAMESPACE --yes
 ```
 
+**Result: PASS** (tested 2026-05-07)
+- Labels updated: `team=updated`, `env=production` (was `team=original`)
+- Quota updated: `cpuRequest=500m`, `cpuLimit=1000m`
+- Member clusters unchanged: both `contoso-prd-01-fm` and `contoso-prd-02-fm` still listed
+
 ---
 
 ## Scenario 8: Delete with Keep policy
@@ -382,6 +387,11 @@ kubectl get ns $MANAGED_NAMESPACE
 kubectl delete ns $MANAGED_NAMESPACE
 ```
 
+**Result: PASS** (tested 2026-05-07)
+- ARM resource deleted (ResourceNotFound)
+- Kubernetes namespace `test-ns` still Active on member cluster (Keep policy preserved it)
+- Note: When reusing the same namespace name after Keep delete, use `--adoption-policy Always` or wait for full cleanup
+
 ---
 
 ## Scenario 9: Delete with Delete policy
@@ -410,6 +420,10 @@ az aks get-credentials -g $GROUP -n contoso-prd-01-fm --overwrite-existing
 kubectl get ns $MANAGED_NAMESPACE
 # Should return NotFound
 ```
+
+**Result: PASS** (tested 2026-05-07)
+- Namespace `test-ns-9` removed from member after delete (NotFound)
+- Delete policy correctly cleaned up K8s namespace on member cluster
 
 ---
 
@@ -447,6 +461,11 @@ az fleet get-credentials -g $GROUP -n $FLEET --overwrite-existing
 az fleet namespace delete -g $GROUP -f $FLEET -n $MANAGED_NAMESPACE --yes
 ```
 
+**Result: PASS** (tested 2026-05-07)
+- Hub credentials: default namespace set to `test-ns-10`
+- Member credentials: default namespace set to `test-ns-10`
+- Both `kubectl config view` confirmed correct namespace
+
 ---
 
 ## Scenario 11: List and show namespaces
@@ -473,3 +492,7 @@ az fleet namespace show -g $GROUP -f $FLEET -n test-ns-2 -o table
 az fleet namespace delete -g $GROUP -f $FLEET -n test-ns-1 --yes
 az fleet namespace delete -g $GROUP -f $FLEET -n test-ns-2 --yes
 ```
+
+**Result: PASS** (tested 2026-05-07)
+- List returned all 3 namespaces (test-ns-10, test-ns-11a, test-ns-11b) in table format
+- Show returned correct details for each individual namespace
