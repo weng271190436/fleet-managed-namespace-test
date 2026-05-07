@@ -187,6 +187,11 @@ az fleet namespace show -g $GROUP -f $FLEET -n $MANAGED_NAMESPACE \
 az fleet namespace delete -g $GROUP -f $FLEET -n $MANAGED_NAMESPACE --yes
 ```
 
+**Result: PASS** (tested 2026-05-07)
+- Created with one member (`contoso-prd-01-fm`), added second via update → both listed
+- Removed first member via update → only `contoso-prd-02-fm` listed
+- Add/remove member cluster list works correctly
+
 ---
 
 ## Scenario 5: Switch to External rollout strategy
