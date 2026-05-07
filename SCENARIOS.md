@@ -248,6 +248,10 @@ az fleet namespace delete -g $GROUP -f $FLEET -n $MANAGED_NAMESPACE --yes
 kubectl delete clusterstagedupdatestrategy test-strategy
 ```
 
+**Result: PASS** (tested 2026-05-07)
+- Created with default rollout, switched to External with `test-strategy`
+- Verified: `type=External`, `clusterUpdateStrategy.name=test-strategy`
+
 ---
 
 ## Scenario 6: Cannot switch back from External to RollingUpdate
@@ -293,6 +297,11 @@ az fleet namespace update \
 az fleet namespace delete -g $GROUP -f $FLEET -n $MANAGED_NAMESPACE --yes
 kubectl delete clusterstagedupdatestrategy test-strategy
 ```
+
+**Result: PASS** (tested 2026-05-07)
+- Switching from External to RollingUpdate correctly rejected by server
+- Error: `cluster update strategy reference is only allowed when rollout strategy type is External`
+- Note: The server retains the strategy reference from the External config, so even passing `--cluster-update-strategy ""` doesn't help. The transition is blocked server-side regardless.
 
 ---
 
