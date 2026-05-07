@@ -112,6 +112,9 @@ az aks get-credentials --resource-group $GROUP --name contoso-prd-02-fm --overwr
 ## Create a ClusterStagedUpdateStrategy
 
 ```bash
+# Switch back to hub context (get-credentials above sets context to the last member cluster)
+az fleet get-credentials --resource-group $GROUP --name $FLEET --overwrite-existing
+
 kubectl apply -f - <<EOF
 apiVersion: placement.kubernetes-fleet.io/v1
 kind: ClusterStagedUpdateStrategy
