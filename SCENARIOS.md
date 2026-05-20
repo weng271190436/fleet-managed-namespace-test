@@ -196,10 +196,10 @@ az fleet namespace delete -g $GROUP -f $FLEET -n $MANAGED_NAMESPACE --yes
 
 ## Scenario 5: Switch to External rollout strategy
 
-**Goal:** Verify switching from default (RollingUpdate) to External rollout strategy.
+**Goal:** Verify switching from default (RollingUpdate) to External rollout strategy using `--rollout-update-strategy`.
 
 ```bash
-# Create with default rollout
+# Create with default rollout (RollingUpdate is inferred when --rollout-update-strategy is omitted)
 az fleet namespace create \
   -g $GROUP -f $FLEET -n $MANAGED_NAMESPACE \
   --member-cluster-names contoso-prd-01-fm contoso-prd-02-fm \
@@ -226,11 +226,10 @@ spec:
           environment: team-alpha-production
 EOF
 
-# Switch to External
+# Switch to External (inferred from --rollout-update-strategy)
 az fleet namespace update \
   -g $GROUP -f $FLEET -n $MANAGED_NAMESPACE \
-  --rollout-strategy External \
-  --cluster-update-strategy test-strategy
+  --rollout-update-strategy test-strategy
 ```
 
 **Verify:**
@@ -248,15 +247,16 @@ az fleet namespace delete -g $GROUP -f $FLEET -n $MANAGED_NAMESPACE --yes
 kubectl delete clusterstagedupdatestrategy test-strategy
 ```
 
-**Result: PASS** (tested 2026-05-07)
-- Created with default rollout, switched to External with `test-strategy`
+**Result: PASS** (tested 2026-05-20)
+- Created with default rollout (RollingUpdate), switched to External with `--rollout-update-strategy test-strategy`
 - Verified: `type=External`, `clusterUpdateStrategy.name=test-strategy`
+- Note: `--rollout-update-strategy` is a preview argument; `--rollout-strategy` has been removed (rollout type is now inferred)
 
 ---
 
-## Scenario 6: Cannot switch back from External to RollingUpdate
+## Scenario 6: External strategy is preserved across non-rollout updates
 
-**Goal:** Verify that once External is set, you cannot switch back to RollingUpdate.
+**Goal:** Verify that once External is set, updating other fields (tags, member clusters, labels) preserves the External rollout strategy.
 
 ```bash
 # Create and switch to External (use steps from Scenario 5)
@@ -280,16 +280,27 @@ EOF
 
 az fleet namespace update \
   -g $GROUP -f $FLEET -n $MANAGED_NAMESPACE \
-  --rollout-strategy External \
-  --cluster-update-strategy test-strategy
+  --rollout-update-strategy test-strategy
 
-# Try switching back to RollingUpdate — should fail
+# Update tags — should preserve External
 az fleet namespace update \
   -g $GROUP -f $FLEET -n $MANAGED_NAMESPACE \
-  --rollout-strategy RollingUpdate
+  --tags env=test
+
+# Update member clusters — should preserve External
+az fleet namespace update \
+  -g $GROUP -f $FLEET -n $MANAGED_NAMESPACE \
+  --member-cluster-names contoso-prd-01-fm contoso-prd-02-fm
 ```
 
-**Expected:** Error indicating you can't switch from External back to RollingUpdate.
+**Verify:**
+
+```bash
+# After each update, External strategy should be preserved
+az fleet namespace show -g $GROUP -f $FLEET -n $MANAGED_NAMESPACE \
+  --query "properties.propagationPolicy.placementProfile.defaultClusterResourcePlacement.rolloutStrategy"
+# Should show type=External, clusterUpdateStrategy.name=test-strategy
+```
 
 **Cleanup:**
 
@@ -298,10 +309,10 @@ az fleet namespace delete -g $GROUP -f $FLEET -n $MANAGED_NAMESPACE --yes
 kubectl delete clusterstagedupdatestrategy test-strategy
 ```
 
-**Result: PASS** (tested 2026-05-07)
-- Switching from External to RollingUpdate correctly rejected by server
-- Error: `cluster update strategy reference is only allowed when rollout strategy type is External`
-- Note: The server retains the strategy reference from the External config, so even passing `--cluster-update-strategy ""` doesn't help. The transition is blocked server-side regardless.
+**Result: PASS** (tested 2026-05-20)
+- External strategy preserved after `--tags` update
+- External strategy preserved after `--member-cluster-names` update
+- Note: The CLI no longer exposes `--rollout-strategy RollingUpdate` directly. Rollout type is inferred: omitting `--rollout-update-strategy` preserves the existing strategy on update; providing it sets External.
 
 ---
 
@@ -601,9 +612,16 @@ EOF
 az fleet namespace create \
   -g $GROUP -f $FLEET -n test-s13 \
   --member-cluster-names contoso-prd-01-fm contoso-prd-02-fm \
-  --rollout-strategy External \
-  --cluster-update-strategy s13-strategy \
+  --rollout-update-strategy s13-strategy \
   --delete-policy Delete --adoption-policy Never
+```
+
+**Verify:**
+
+```bash
+az fleet namespace show -g $GROUP -f $FLEET -n test-s13 \
+  --query "properties.propagationPolicy.placementProfile.defaultClusterResourcePlacement.rolloutStrategy"
+# Should show type=External, clusterUpdateStrategy.name=s13-strategy
 ```
 
 **Cleanup:**
@@ -613,28 +631,82 @@ az fleet namespace delete -g $GROUP -f $FLEET -n test-s13 --yes
 kubectl delete clusterstagedupdatestrategy s13-strategy
 ```
 
-**Result: PASS** (tested 2026-05-07)
+**Result: PASS** (tested 2026-05-07, re-tested 2026-05-20 with `--rollout-update-strategy`)
 - Created with PickFixed + External rollout + strategy reference in a single create command
 - Verified: `placementType=PickFixed`, `rolloutStrategy.type=External`, `clusterUpdateStrategy.name=s13-strategy`
 
 ---
 
-## Scenario 14: Update strategy name on existing External namespace
+## Scenario 14: Switch between update strategies on an External namespace
 
-**Goal:** Verify updating only the `--cluster-update-strategy` name without re-specifying `--rollout-strategy`.
+**Goal:** Verify switching from one `ClusterStagedUpdateStrategy` to another on an existing External namespace.
 
 ```bash
-# After S13, with namespace already on External:
+# Step 1: Create strategies on the hub
+kubectl apply -f - <<EOF
+apiVersion: placement.kubernetes-fleet.io/v1
+kind: ClusterStagedUpdateStrategy
+metadata:
+  name: strategy-a
+spec:
+  stages:
+    - name: dev
+      labelSelector:
+        matchLabels:
+          environment: team-alpha-development
+EOF
+
+kubectl apply -f - <<EOF
+apiVersion: placement.kubernetes-fleet.io/v1
+kind: ClusterStagedUpdateStrategy
+metadata:
+  name: strategy-b
+spec:
+  stages:
+    - name: prod
+      labelSelector:
+        matchLabels:
+          environment: team-alpha-production
+EOF
+
+# Step 2: Create namespace with strategy-a
+az fleet namespace create \
+  -g $GROUP -f $FLEET -n $MANAGED_NAMESPACE \
+  --member-cluster-names contoso-prd-01-fm contoso-prd-02-fm \
+  --rollout-update-strategy strategy-a \
+  --delete-policy Delete --adoption-policy Never
+
+# Step 3: Switch to strategy-b
 az fleet namespace update \
-  -g $GROUP -f $FLEET -n test-s13 \
-  --cluster-update-strategy s14-new-strategy
+  -g $GROUP -f $FLEET -n $MANAGED_NAMESPACE \
+  --rollout-update-strategy strategy-b
 ```
 
-**Result: FAIL / BUG** (tested 2026-05-07)
-- Updating `--cluster-update-strategy` alone (without `--rollout-strategy External`) is **silently ignored** — the old strategy name is retained
-- Adding `--rollout-strategy External` explicitly works: `az fleet namespace update --rollout-strategy External --cluster-update-strategy s14-new-strategy`
-- **Root cause:** The `validate_rollout_strategy` validator is not wired to the `fleet namespace update` command in `_params.py`, so the CLI doesn't reject or handle `--cluster-update-strategy` alone on update. The `_build_propagation_policy` function sees `rollout_strategy=None` and skips building the rollout strategy object.
-- **Workaround:** Always specify `--rollout-strategy External` when updating the strategy name.
+**Verify:**
+
+```bash
+# After step 2
+az fleet namespace show -g $GROUP -f $FLEET -n $MANAGED_NAMESPACE \
+  --query "properties.propagationPolicy.placementProfile.defaultClusterResourcePlacement.rolloutStrategy"
+# Should show type=External, clusterUpdateStrategy.name=strategy-a
+
+# After step 3
+az fleet namespace show -g $GROUP -f $FLEET -n $MANAGED_NAMESPACE \
+  --query "properties.propagationPolicy.placementProfile.defaultClusterResourcePlacement.rolloutStrategy"
+# Should show type=External, clusterUpdateStrategy.name=strategy-b
+```
+
+**Cleanup:**
+
+```bash
+az fleet namespace delete -g $GROUP -f $FLEET -n $MANAGED_NAMESPACE --yes
+kubectl delete clusterstagedupdatestrategy strategy-a strategy-b
+```
+
+**Result: PASS** (tested 2026-05-20)
+- Created with `strategy-a`: `type=External`, `clusterUpdateStrategy.name=strategy-a`
+- Switched to `strategy-b`: `type=External`, `clusterUpdateStrategy.name=strategy-b`
+- Note: The old Scenario 14 bug (strategy name silently ignored) is fixed — `--rollout-update-strategy` now sets both the strategy reference and the External type in one parameter
 
 ---
 
@@ -735,11 +807,51 @@ az fleet namespace update \
   --member-cluster-names
 ```
 
-**Result: NO-OP** (tested 2026-05-07)
+**Result: NO-OP** (tested 2026-05-07, re-tested 2026-05-20)
 - `--member-cluster-names` with no values results in an empty list `[]`
 - `_build_propagation_policy` sees empty list as falsy, returns `None`
 - PATCH sends no propagation policy change — existing cluster list unchanged
-- **Note:** There is currently no way to remove all member clusters via the CLI update command. Users would need to delete and re-create the namespace.
+- **Root cause:** PATCH omits `propagationPolicy` when `None`; server interprets omission as "don't change"
+- **Workaround:** Use `az fleet namespace create` (PUT) with `--adoption-policy Always` and no `--member-cluster-names` to overwrite the resource and clear the propagation policy (see Scenario 18b)
+
+---
+
+## Scenario 18b: Remove all members via PUT (create --adoption-policy Always)
+
+**Goal:** Verify that re-creating a namespace without `--member-cluster-names` removes the propagation policy (hub-only).
+
+```bash
+# Step 1: Create with members
+az fleet namespace create \
+  -g $GROUP -f $FLEET -n $MANAGED_NAMESPACE \
+  --member-cluster-names contoso-prd-01-fm contoso-prd-02-fm \
+  --delete-policy Delete --adoption-policy Never
+
+# Step 2: Re-create (PUT) without members — clears propagation policy
+az fleet namespace create \
+  -g $GROUP -f $FLEET -n $MANAGED_NAMESPACE \
+  --delete-policy Delete --adoption-policy Always
+```
+
+**Verify:**
+
+```bash
+az fleet namespace show -g $GROUP -f $FLEET -n $MANAGED_NAMESPACE \
+  --query "properties.propagationPolicy"
+# Should be null
+```
+
+**Cleanup:**
+
+```bash
+az fleet namespace delete -g $GROUP -f $FLEET -n $MANAGED_NAMESPACE --yes
+```
+
+**Result: PASS** (tested 2026-05-20)
+- Created with two members (`contoso-prd-01-fm`, `contoso-prd-02-fm`)
+- Re-created via PUT with `--adoption-policy Always` and no `--member-cluster-names`
+- `propagationPolicy` is now `null` — members removed, namespace is hub-only
+- Note: PUT replaces the full resource, so `propagationPolicy=None` means "no policy". PATCH omits `None` fields, so it can't clear the policy.
 
 ---
 
